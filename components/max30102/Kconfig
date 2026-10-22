@@ -1,0 +1,26 @@
+menu "MAX30102"
+
+    config MAX30102_PIN_SDA
+        int "Chân SDA"
+        default 8
+        help
+            Theo sơ đồ mạch hiện tại SDA = GPIO8. Trên SuperMini GPIO8 là chân strapping
+            (nối LED xanh trên board): giữ điện trở kéo lên để boot bình thường.
+
+    config MAX30102_PIN_SCL
+        int "Chân SCL"
+        default 9
+        help
+            Theo sơ đồ mạch hiện tại SCL = GPIO9 (cũng là nút BOOT trên SuperMini).
+
+    config MAX30102_I2C_HZ
+        int "Tốc độ I2C (Hz)"
+        default 400000
+
+    config MAX30102_LED_CURRENT
+        hex "Dòng LED RED/IR (thanh ghi 0x0C/0x0D)"
+        default 0x36
+        help
+            0x36 khoảng 11 mA, phù hợp đo ở cổ tay. Tăng nếu tín hiệu AC yếu.
+
+endmenu

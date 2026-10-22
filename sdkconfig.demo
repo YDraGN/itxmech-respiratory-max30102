@@ -1,0 +1,4 @@
+# Chế độ demo nhanh (env esp32c3_demo trong platformio.ini): mỗi "phút" chỉ 10 giây.
+# Model cần cửa sổ 60 phút nên ở chế độ thường phải chờ 1 giờ mới có kết quả; ở đây chỉ khoảng 10 phút.
+# Kết quả model KHÔNG có ý nghĩa y khoa, chỉ dùng để trình diễn luồng BLE → app → server.
+CONFIG_RESPI_MINUTE_PERIOD_S=10

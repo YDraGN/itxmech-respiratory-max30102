@@ -1,0 +1,11 @@
+build/
+.pio/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
+sdkconfig.esp32c3
+sdkconfig.esp32c3_demo
+tests/host/build/
+.vscode/
+*.bin

@@ -1,0 +1,66 @@
+menu "RespiCare wristband"
+
+    config RESPI_DEVICE_ID
+        string "device_id (để trống = WB-C3-XXXX theo MAC)"
+        default ""
+        help
+            Phải trùng với id server cấp cho thiết bị. Để trống thì firmware tự đặt
+            WB-C3-XXXX, với XXXX là 4 ký tự cuối địa chỉ MAC Bluetooth.
+
+    menu "Chân GPIO"
+        config RESPI_PIN_LED_RED
+            int "LED đỏ"
+            default 4
+        config RESPI_PIN_LED_GREEN
+            int "LED xanh"
+            default 5
+        config RESPI_LED_ACTIVE_HIGH
+            bool "LED sáng khi ghi mức 1"
+            default y
+        config RESPI_PIN_MAX_INT
+            int "Chân INT của MAX30102 (chỉ cấu hình input, chưa dùng ngắt)"
+            default 10
+    endmenu
+
+    menu "Kết nối và dự phòng"
+        config RESPI_APP_WAIT_S
+            int "Số giây chờ app trước khi chuyển sang chế độ tự chạy"
+            default 60
+            help
+                Sau khi khởi động hoặc mất BLE, nếu không có app nào bắt tay xong
+                (SET_GATEWAY(1)) trong khoảng này thì vòng tự lưu dữ liệu và chờ uplink.
+
+        config RESPI_LED_SEARCH_S
+            int "Số giây nháy nhanh báo đang tìm BLE (0 = nháy đến khi có app)"
+            default 60
+            help
+                Hết thời gian này LED quay lại báo trạng thái cảm biến như cũ để
+                không che mất thông tin đeo/không đeo và tiết kiệm pin.
+
+        config RESPI_ADV_FAST_S
+            int "Số giây quảng bá nhanh (200 ms) sau khi khởi động hoặc mất kết nối"
+            default 120
+
+        config RESPI_BACKFILL_KEEP_ACKED
+            int "Số bản ghi đã ACK vẫn gửi lại khi có BACKFILL từ điện thoại khác"
+            default 1440
+            help
+                ACK chỉ đánh dấu, bản ghi còn trong flash đến khi bị ghi đè. Khi một
+                điện thoại khác kết nối và xin BACKFILL từ seq cũ, vòng gửi lại tối đa
+                chừng này bản ghi tính ngược từ acked_seq (mặc định 24 giờ).
+    endmenu
+
+    menu "Gỡ lỗi"
+        config RESPI_MINUTE_PERIOD_S
+            int "Độ dài một 'phút' (giây)"
+            default 60
+            help
+                Chỉ giảm khi thử BLE/RECORDS cho nhanh. Model được huấn luyện theo phút
+                thật, giảm giá trị này thì kết quả cảnh báo không còn ý nghĩa.
+
+        config RESPI_LOG_EVERY_SECOND
+            bool "In log SpO2/HR mỗi giây"
+            default y
+    endmenu
+
+endmenu
