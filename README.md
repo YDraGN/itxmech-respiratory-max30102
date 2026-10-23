@@ -171,7 +171,7 @@ Cài **nRF Connect for Mobile** (Android/iOS).
 |---|---|---|
 | 1 | *Scanner* → thấy `RespiCare-XXXX` → *Connect* | Log vòng: `điện thoại đã kết nối` |
 | 2 | Menu ⋮ → *Request MTU* → 247 | Log: `MTU = 247` |
-| 3 | Mở service `a51c0001-…`, đọc characteristic `a51c0002` (DEVICE_INFO) | JSON `{"id":"WB-C3-XXXX","fw":"0.2.0",...}` |
+| 3 | Mở service `a51c0001-…`, đọc characteristic `a51c0002` (DEVICE_INFO) | JSON `{"id":"WB-C3-XXXX","fw":"0.3.0",...}` |
 | 4 | Bật notify (mũi tên 3 vạch) cho `a51c0003`, `a51c0004`, `a51c0005`, `a51c0006` | |
 | 5 | Ghi `a51c0007` kiểu *Byte array*: `02` + 4 byte giờ hiện tại (epoch, little-endian) | Log: `đã đồng bộ giờ`. Từ đây `a51c0003` (LIVE) nhảy 12 byte mỗi 15 giây |
 | 6 | Ghi `a51c0007` = `0401000000` | Log `WAITING_APP -> GATEWAY`; đang đeo thì LED xanh chớp mỗi 5 giây |
