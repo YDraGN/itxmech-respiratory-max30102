@@ -162,6 +162,10 @@ static void publish_minute(const vitals_minute_t *vm, const spo2tc_result_t *r,
         a.ts = vm->ts_start;
         a.state = (uint8_t)ble_proto_state_from_level(r->level);
         a.trigger = (uint8_t)ble_proto_trigger_from_result(r);
+        // 60 phút đầu model chưa đủ cửa sổ nên mức là UNKNOWN dù tín hiệu tốt: đó là "đang khởi động",
+        // không phải mất tín hiệu. Chỉ giữ signal_lost khi phút này thật sự ít giây hợp lệ.
+        if (a.trigger == BLE_TRIG_SIGNAL_LOST && engine->t < SPO2TC_IN_MIN && vm->m[SPO2TC_SPO2_VALID] >= 0.5f)
+            a.trigger = BLE_TRIG_NONE;
         a.out_q = r->ran_model ? r->out_q : (int8_t)-128;
         a.T = (uint8_t)engine->cfg.T;
         a.spo2_now = vm->m[SPO2TC_SPO2_MEAN];

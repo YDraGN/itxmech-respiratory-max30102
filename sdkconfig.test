@@ -1,0 +1,4 @@
+# Bản thử nghiệm thật (env esp32c3_test trong platformio.ini): thời gian đo, model, ngưỡng y như bản chạy thật.
+# Chỉ khác: gửi nhật ký qua BLE (characteristic DEBUG_LOG a51c000b) để xem log trên app khi không cắm USB.
+# Nhật ký chỉ chạy khi có máy bật nhận, không ai nghe thì không tốn CPU hay sóng.
+CONFIG_RESPI_BLE_DEBUG_LOG=y
