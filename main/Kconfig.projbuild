@@ -60,7 +60,35 @@ menu "RespiCare wristband"
 
         config RESPI_LOG_EVERY_SECOND
             bool "In log SpO2/HR mỗi giây"
-            default y
+            default n
+            help
+                Mỗi RESPI_LIVE_PERIOD_S giây đã có một dòng "live |". Bật mục này khi cần
+                xem từng giây (tốn CPU cho UART và đầy nhật ký BLE nhanh hơn).
+
+        config RESPI_BLE_DEBUG_LOG
+            bool "Gửi nhật ký qua BLE (characteristic DEBUG_LOG a51c000b)"
+            default n
+            help
+                Khi bật, máy nào bật notify DEBUG_LOG (nRF Connect hoặc màn Nhật ký vòng
+                trong app) nhận được các dòng log như trên cổng USB, để thử ngoài thực tế
+                không cần cắm máy tính. Chỉ dùng ở bản thử nghiệm.
+    endmenu
+
+    menu "Hiển thị và đo hiệu năng"
+        config RESPI_LIVE_PERIOD_S
+            int "Chu kỳ LIVE (giây): số hiển thị chung cho app, người nhà và web"
+            range 5 60
+            default 15
+            help
+                Vòng gộp các giây trong khoảng này (trung bình / nhỏ nhất) rồi gửi một gói LIVE.
+                App gateway chuyển lên server để mọi máy thấy cùng một số.
+
+        config RESPI_DIAG_PERIOD_MIN
+            int "Chu kỳ DIAG (phút): số liệu CPU / thời gian xử lý"
+            range 1 60
+            default 5
+            help
+                Nên bằng nhịp chạy model (5 phút) để mỗi cửa sổ có đúng một lần chạy model.
     endmenu
 
 endmenu

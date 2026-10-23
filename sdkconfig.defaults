@@ -6,6 +6,10 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # Task chính chạy vòng lặp phút (engine + model)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
+# Đo % CPU cho DIAG (main/system/diag.c): bộ đếm thời gian chạy của từng task, gồm task IDLE.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
 # BLE: NimBLE, chỉ vai trò peripheral, mỗi lúc một kết nối (một điện thoại gateway)
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
@@ -17,3 +21,9 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
 # Thêm buffer cho BACKFILL gửi dồn nhiều notify
 CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+
+# Chế độ WiFi (main/link/uplink.c): WiFi và BLE dùng chung ăng-ten, bật cơ chế chia sóng.
+# HTTPS kiểm tra chứng chỉ server bằng bộ CA gốc có sẵn của ESP-IDF.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y

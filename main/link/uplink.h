@@ -6,19 +6,23 @@ extern "C" {
 #endif
 
 /*
- * Đường gửi thẳng lên server khi không có app (chế độ STANDALONE).
+ * Chế độ WiFi: gửi thẳng lên server khi không có app (trạng thái STANDALONE).
  *
- * HIỆN CHƯA GỬI MẠNG: phần WiFi + HTTPS (POST /api/app/v1/ingest/..., CONFIG_VA_API.md §6)
- * sẽ làm sau khi server có endpoint và khóa thiết bị (xem README, mục "Việc còn lại").
- * Danh sách WiFi app gửi xuống đã có sẵn trong wifi_store_get().
- * Task này đã chạy đúng nhịp (mỗi upload_interval_min, hoặc ngay khi có cảnh báo) và chỉ
- * ghi log lượng dữ liệu đang chờ, để khi thêm HTTP chỉ cần điền vào uplink_flush().
- * Dữ liệu vẫn nằm an toàn trong flash cho tới khi app hoặc uplink lấy đi.
+ * Mỗi upload_interval_min phút (hoặc ngay khi có ALERT/CRITICAL): bật WiFi (thử các mạng app đã cài,
+ * mới nhất trước), POST /api/app/v1/ingest/assessments + ingest/telemetry với header x-device-id /
+ * x-device-key (khóa app ghi qua BLE, device_cred.h), lấy giờ từ server_time, lấy ngưỡng mới từ
+ * GET device/config, rồi tắt WiFi. Chưa có WiFi hoặc khóa thì dữ liệu nằm trong flash, chờ app.
  */
 void uplink_init(void);
 void uplink_set_active(bool active);
 void uplink_kick(bool urgent);
 bool uplink_wifi_on(void);
+
+/* Gọi sau khi danh sách WiFi hoặc khóa đổi: cập nhật LED "chế độ WiFi". */
+void uplink_refresh_ready(void);
+
+/* Có ít nhất một WiFi và khóa thiết bị (đọc lại sau mỗi lần app ghi WIFI_PROV). */
+bool uplink_wifi_ready(void);
 
 #ifdef __cplusplus
 }

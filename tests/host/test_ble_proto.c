@@ -72,18 +72,32 @@ static void test_record_bytes(void) {
 }
 
 static void test_live_status_assessment(void) {
-  uint8_t live[8];
-  ble_live_t v = {.ts = 0x01020304, .spo2 = 97.25f, .pulse = 72.4f, .sqi_pct = 130};
+  uint8_t live[BLE_PROTO_LIVE_SIZE];
+  CHECK(BLE_PROTO_LIVE_SIZE == 12);
+  ble_live_t v = {.ts = 0x01020304, .spo2 = 97.25f, .spo2_min = 95.0f, .pulse = 72.4f, .sqi_pct = 130,
+                  .valid_pct = 93, .worn = true};
   ble_proto_encode_live(&v, live);
   CHECK(live[0] == 0x04 && live[3] == 0x01);
   CHECK(live[4] == (973 & 0xFF) && live[5] == (973 >> 8));
-  CHECK(live[6] == 72 && live[7] == 100);   /* sqi cắt về 100 */
+  CHECK(live[6] == (950 & 0xFF) && live[7] == (950 >> 8));
+  CHECK(live[8] == 72 && live[9] == 100);   /* sqi cắt về 100 */
+  CHECK(live[10] == 93 && live[11] == 0x01);
+  v.spo2 = v.spo2_min = NAN;
+  v.pulse = NAN;
+  v.worn = false;
+  ble_proto_encode_live(&v, live);   /* cửa sổ không có giây hợp lệ */
+  CHECK(live[4] == 0xFF && live[5] == 0xFF && live[6] == 0xFF && live[7] == 0xFF && live[8] == 0xFF);
+  CHECK(live[11] == 0x00);
 
   uint8_t st[14];
   ble_status_t s = {.battery_pct = BLE_PROTO_BATTERY_UNKNOWN, .worn = true, .on_wifi = false,
                     .backlog = 3, .acked_seq = 7, .last_seq = 10, .config_version = 9};
   ble_proto_encode_status(&s, st);
   CHECK(st[0] == 0xFF && st[1] == 0x01 && st[2] == 3 && st[4] == 7 && st[8] == 10 && st[12] == 9);
+  s.on_wifi = true;
+  s.wifi_ready = true;   /* bit 3: có WiFi + khóa, sẵn sàng dự phòng khi mất BLE */
+  ble_proto_encode_status(&s, st);
+  CHECK(st[1] == (0x01 | 0x04 | 0x08));
 
   uint8_t a[24];
   ble_assessment_t as = {.seq = 42, .ts = 100, .state = BLE_STATE_ALERT, .trigger = BLE_TRIG_ML_RISK,
@@ -151,8 +165,87 @@ static void test_wifi_prov(void) {
   CHECK(memchr(out, 'n', n) == NULL);   /* không lộ mật khẩu */
 }
 
+static void test_device_key(void) {
+  /* Cùng byte với BlePacketCodec.encodeDeviceCredentials của app: 03 | 3 | "k3y" | 23 | url */
+  const char *url = "https://h.vn/api/app/v1/";
+  uint8_t b[64];
+  size_t n = 0;
+  b[n++] = 0x03;
+  b[n++] = 3;
+  memcpy(b + n, "k3y", 3);
+  n += 3;
+  b[n++] = (uint8_t)strlen(url);
+  memcpy(b + n, url, strlen(url));
+  n += strlen(url);
+  ble_wifi_cmd_t cmd;
+  CHECK(ble_proto_decode_wifi(b, n, &cmd));
+  CHECK(cmd.op == BLE_WIFI_OP_SET_KEY);
+  CHECK(strcmp(cmd.key, "k3y") == 0);
+  CHECK(strcmp(cmd.url, "https://h.vn/api/app/v1") == 0);   /* bỏ "/" cuối */
+  CHECK(!ble_proto_decode_wifi(b, n - 1, &cmd));             /* thiếu byte */
+
+  b[2] = '"';                                                /* ký tự phá JSON/header */
+  CHECK(!ble_proto_decode_wifi(b, n, &cmd));
+  b[2] = 'k';
+  memcpy(b + 7, "ftp://x.", 8);                              /* không phải http(s) */
+  CHECK(!ble_proto_decode_wifi(b, n, &cmd));
+}
+
+static void test_record_assessment_roundtrip(void) {
+  ble_record_t r = {.seq = 77, .ts = 1792137600u, .spo2_mean = 95.4f, .spo2_min = NAN, .spo2_valid_pct = 98,
+                    .pulse_mean = 72.0f, .sqi_pct = 91, .worn = true};
+  uint8_t rb[BLE_PROTO_RECORD_SIZE];
+  ble_proto_encode_record(&r, rb);
+  ble_record_t r2;
+  CHECK(ble_proto_decode_record(rb, sizeof(rb), &r2));
+  CHECK(r2.seq == 77 && r2.ts == 1792137600u && fabsf(r2.spo2_mean - 95.4f) < 1e-4f && isnan(r2.spo2_min));
+  CHECK(r2.spo2_valid_pct == 98 && r2.pulse_mean == 72.0f && r2.sqi_pct == 91 && r2.worn);
+  CHECK(!ble_proto_decode_record(rb, sizeof(rb) - 1, &r2));
+
+  ble_assessment_t a = {.seq = 78, .ts = 1792137660u, .state = BLE_STATE_ALERT, .trigger = BLE_TRIG_RULE_ALERT,
+                        .out_q = -12, .T = 88, .spo2_now = 87.5f, .spo2_min_10m = 86.0f, .spo2_slope_30m = -0.25f,
+                        .pulse_now = NAN, .local_notified = true,
+                        .reasons = BLE_REASON_BELOW_ALERT | BLE_REASON_SPO2_DOWNTREND, .config_version = 9};
+  uint8_t ab[BLE_PROTO_ASSESSMENT_SIZE];
+  ble_proto_encode_assessment(&a, ab);
+  ble_assessment_t a2;
+  CHECK(ble_proto_decode_assessment(ab, sizeof(ab), &a2));
+  CHECK(a2.seq == 78 && a2.state == BLE_STATE_ALERT && a2.trigger == BLE_TRIG_RULE_ALERT && a2.out_q == -12);
+  CHECK(a2.T == 88 && fabsf(a2.spo2_now - 87.5f) < 1e-4f && fabsf(a2.spo2_slope_30m + 0.25f) < 1e-4f);
+  CHECK(isnan(a2.pulse_now) && a2.local_notified && a2.reasons == a.reasons && a2.config_version == 9);
+}
+
+/* DIAG 24 B: byte cố định để app và server đọc đúng (ble-gatt.md mục 3.9). */
+static void test_diag(void) {
+  ble_diag_t d = {.ts = 1792137900u, .uptime_s = 4500, .boot_id = 0x0102, .cpu_avg_pct = 2.34f,
+                  .cpu_peak_pct = 11.0f, .model_ms = 17.9f, .minute_ms = 61.2f, .flash_ms = 42.0f,
+                  .heap_min_kb = 61, .wifi_s = 9, .reset_reason = 1, .ble_drops = 0};
+  uint8_t b[BLE_PROTO_DIAG_SIZE];
+  ble_proto_encode_diag(&d, b);
+  CHECK(ble_proto_get_u32(b) == 1792137900u && ble_proto_get_u32(b + 4) == 4500);
+  CHECK(b[8] == 0x02 && b[9] == 0x01);
+  CHECK(b[10] == 23 && b[11] == 0);            /* 2,34 % → 23 (×10) */
+  CHECK(b[12] == 110 && b[14] == 179 && b[16] == (612 & 0xFF) && b[17] == (612 >> 8));
+  CHECK(b[18] == 164 && b[19] == 1);           /* 420 */
+  CHECK(b[20] == 61 && b[21] == 9 && b[22] == 1 && b[23] == 0);
+
+  ble_diag_t d2;
+  CHECK(ble_proto_decode_diag(b, sizeof(b), &d2));
+  CHECK(d2.uptime_s == 4500 && d2.boot_id == 0x0102 && fabsf(d2.cpu_avg_pct - 2.3f) < 1e-4f);
+  CHECK(fabsf(d2.model_ms - 17.9f) < 1e-4f && d2.heap_min_kb == 61 && d2.wifi_s == 9);
+  CHECK(!ble_proto_decode_diag(b, sizeof(b) - 1, &d2));
+
+  d.model_ms = NAN;   /* cửa sổ không chạy model */
+  ble_proto_encode_diag(&d, b);
+  CHECK(b[14] == 0xFF && b[15] == 0xFF);
+  CHECK(ble_proto_decode_diag(b, sizeof(b), &d2) && isnan(d2.model_ms));
+}
+
 int main(void) {
+  test_diag();
   test_wifi_prov();
+  test_device_key();
+  test_record_assessment_roundtrip();
   test_config_example_from_spec();
   test_config_rejects_invalid();
   test_config_without_model_thresholds();

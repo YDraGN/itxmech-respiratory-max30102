@@ -8,11 +8,12 @@ Config và API server nằm ở `SPO2-RESEARCH/respiratory-risk-classifier/firmw
 
 | Task | Ưu tiên | Việc |
 |---|---|---|
-| `sensor` | 5 | Đọc FIFO MAX30102 ~25 Hz, tính SpO2/HR (`sensor/ppg.c`). Mỗi giây: cộng vào bộ gộp phút, gửi LIVE, cập nhật LED đỏ/xanh |
-| `main` (vòng lặp phút) | 1 | Áp config mới, chạy engine luật + model, ghi flash, gửi RECORDS / ASSESSMENT |
+| `sensor` | 5 | Đọc FIFO MAX30102 ~25 Hz, tính SpO2/HR (`sensor/ppg.c`). Mỗi giây: cộng vào bộ gộp phút và cửa sổ LIVE, đo % CPU (`system/diag.c`), cập nhật LED. Mỗi 15 giây: gửi LIVE |
+| `main` (vòng lặp phút) | 1 | Áp config mới, chạy engine luật + model, ghi flash, gửi RECORDS / ASSESSMENT. Mỗi 5 phút: đóng cửa sổ DIAG |
 | NimBLE host | (stack) | Quảng bá, kết nối, đọc/ghi characteristic. Callback không chặn |
-| `ble_tx` | 5 | Hàng đợi notify duy nhất: LIVE, RECORDS, ASSESSMENT, STATUS, BACKFILL |
-| `uplink` | 4 | Chế độ tự chạy: thức dậy mỗi `upload_interval_min` hoặc khi có cảnh báo. Hiện chỉ ghi log, chưa gửi mạng |
+| `ble_tx` | 5 | Hàng đợi notify duy nhất: LIVE, RECORDS, ASSESSMENT, STATUS, BACKFILL, DIAG |
+| `ble_log` | 2 | Chỉ bản demo (`RESPI_BLE_DEBUG_LOG`): chuyển log sang notify DEBUG_LOG khi có máy nghe |
+| `uplink` | 4 | Chế độ tự chạy: thức dậy mỗi `upload_interval_min` hoặc khi có cảnh báo, bật WiFi, gửi lên server, tắt WiFi (README mục 4.4). Stack 8 KB cho HTTPS |
 | `led` | 3 | Vẽ LED theo chế độ (mục 4) |
 
 Engine (`spo2tc_engine_t`) chỉ được sửa trong task phút. Config đến từ BLE được kiểm tra, lưu NVS rồi
@@ -22,11 +23,12 @@ Engine (`spo2tc_engine_t`) chỉ được sửa trong task phút. Config đến 
 
 ```text
 MAX30102 ──I2C──► ppg ──mỗi giây──► vitals (gộp phút) ──mỗi phút──► engine luật + model
-                    │                                                  │
-                    └──► LIVE (BLE notify, chỉ hiển thị)               ▼
+                                      │                                │
+                                      └─ mỗi 15 s ─► LIVE (BLE notify) ▼
+                                         số hiển thị chung: app → server → máy khác, web
                                                      record_store (flash, seq không reset)
                                                         │                      │
-                                         app gateway ◄──┘ RECORDS/ASSESSMENT   └──► uplink (STANDALONE, sẽ làm)
+                                         app gateway ◄──┘ RECORDS/ASSESSMENT   └──► uplink (STANDALONE, WiFi)  
 ```
 
 Bản ghi luôn được ghi flash **trước** khi gửi. Mất BLE giữa chừng thì dữ liệu vẫn còn để BACKFILL.
@@ -122,12 +124,14 @@ không có điện thoại, và để tiết kiệm pin. Vòng vẫn quảng bá
 | Thao tác | Byte |
 |---|---|
 | Ghi: thêm / đổi mật khẩu | `01` · `ssid_len` · SSID · `pass_len` · mật khẩu (`pass_len = 0`: mạng mở) |
-| Ghi: xóa hết | `02` |
+| Ghi: xóa hết danh sách WiFi (giữ khóa) | `02` |
+| Ghi: khóa thiết bị + gốc API server | `03` · `key_len` · khóa (1–64) · `url_len` · URL `http(s)://…` (8–128, bỏ `/` cuối) |
 | Đọc | `count` · (`ssid_len` · SSID) × count, **không** trả mật khẩu |
 
 - SSID 1–32 byte, mật khẩu 0 hoặc 8–63 byte. Sai định dạng: lỗi ATT `0x80`.
 - Tối đa 3 mạng; mạng thứ 4 đẩy mạng cũ nhất ra. Gửi lại SSID đã có thì thay mật khẩu.
-- Gói dài tối đa 98 byte nên app phải xin MTU 247 trước (app đã làm ở bước 1).
-- Hiện vòng chỉ **lưu** WiFi; việc kết nối và gửi lên server làm cùng `uplink_flush()`.
+- Gói dài tối đa 195 byte (op `03`) nên app phải xin MTU 247 trước (app đã làm ở bước 1).
+- Ghi `03 | key_len | key | url_len | url` để lưu khóa thiết bị + gốc API server (`device_cred.c`, NVS khóa `dcred`).
+  `uplink_flush()` dùng WiFi + khóa này để tự gửi lên server khi không có app (README mục 4.4).
 - Liên kết BLE chưa mã hóa (chưa bonding): mật khẩu WiFi đi dạng rõ qua sóng BLE. Chấp nhận khi demo, phải
   bật bonding trước khi dùng thật.

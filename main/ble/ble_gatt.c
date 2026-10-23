@@ -3,8 +3,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "debug_log.h"
 #include "device_clock.h"
+#include "device_cred.h"
 #include "device_state.h"
+#include "diag.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -49,10 +52,17 @@ static const ble_uuid128_t UUID_STATUS = RESPI_UUID(0x0006);
 static const ble_uuid128_t UUID_CONTROL = RESPI_UUID(0x0007);
 static const ble_uuid128_t UUID_CONFIG = RESPI_UUID(0x0008);
 static const ble_uuid128_t UUID_WIFI = RESPI_UUID(0x0009);
+static const ble_uuid128_t UUID_DIAG = RESPI_UUID(0x000A);
+#if CONFIG_RESPI_BLE_DEBUG_LOG
+static const ble_uuid128_t UUID_DEBUG_LOG = RESPI_UUID(0x000B);
+#endif
 
-typedef enum { CHR_INFO = 1, CHR_LIVE, CHR_RECORDS, CHR_ASSESSMENT, CHR_STATUS, CHR_CONTROL, CHR_CONFIG, CHR_WIFI } chr_id_t;
+typedef enum {
+  CHR_INFO = 1, CHR_LIVE, CHR_RECORDS, CHR_ASSESSMENT, CHR_STATUS, CHR_CONTROL, CHR_CONFIG, CHR_WIFI, CHR_DIAG,
+  CHR_DEBUG_LOG,
+} chr_id_t;
 
-typedef enum { TX_LIVE, TX_RECORD, TX_ASSESSMENT, TX_STATUS, TX_BACKFILL } tx_kind_t;
+typedef enum { TX_LIVE, TX_RECORD, TX_ASSESSMENT, TX_STATUS, TX_BACKFILL, TX_DIAG } tx_kind_t;
 typedef struct {
   uint8_t kind;
   uint8_t len;
@@ -64,8 +74,8 @@ static uint8_t s_own_addr_type;
 static char s_name[20];
 static volatile uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static volatile uint16_t s_mtu = BLE_ATT_MTU_DFLT;
-static uint16_t h_live, h_records, h_assessment, h_status;
-static volatile bool s_sub_live, s_sub_records, s_sub_assessment, s_sub_status;
+static uint16_t h_live, h_records, h_assessment, h_status, h_diag, h_debug_log;
+static volatile bool s_sub_live, s_sub_records, s_sub_assessment, s_sub_status, s_sub_diag, s_sub_debug_log;
 static QueueHandle_t s_txq;
 static esp_timer_handle_t s_adv_timer;
 static volatile bool s_adv_fast;
@@ -89,6 +99,7 @@ static void build_status(uint8_t out[BLE_PROTO_STATUS_SIZE]) {
       .worn = vitals_is_worn(),
       .charging = false,
       .on_wifi = uplink_wifi_on(),
+      .wifi_ready = uplink_wifi_ready(),
       .backlog = record_store_backlog(),
       .acked_seq = record_store_acked_seq(),
       .last_seq = record_store_last_seq(),
@@ -161,6 +172,20 @@ static void run_backfill(uint16_t conn, uint32_t requested) {
   ESP_LOGI(TAG, "BACKFILL xong: %u bản ghi, %u assessment%s", n_rec, n_asm, ok ? "" : " (dừng giữa chừng)");
 }
 
+/* Gửi mọi cửa sổ DIAG chưa gửi (cũ trước). Chỉ bỏ khỏi vòng đệm những mục đã notify được. */
+static void send_diag(uint16_t conn) {
+  if (!s_sub_diag) return;
+  static ble_diag_t items[DIAG_RING];   /* chỉ task ble_tx dùng */
+  size_t n = diag_pending(items, DIAG_RING), sent = 0;
+  uint8_t b[BLE_PROTO_DIAG_SIZE];
+  while (sent < n) {
+    ble_proto_encode_diag(&items[sent], b);
+    if (!notify(conn, h_diag, b, sizeof(b))) break;
+    sent++;
+  }
+  diag_consume(sent);
+}
+
 static void tx_task(void *arg) {
   (void)arg;
   tx_msg_t m;
@@ -197,17 +222,38 @@ static void tx_task(void *arg) {
       case TX_BACKFILL:
         run_backfill(conn, m.arg);
         break;
+      case TX_DIAG:
+        send_diag(conn);
+        break;
     }
   }
 }
+
+#if CONFIG_RESPI_BLE_DEBUG_LOG
+/* Đọc nhật ký từ debug_log và notify DEBUG_LOG theo từng đoạn vừa MTU. Không ai nghe thì đọc ra rồi bỏ. */
+static void log_task(void *arg) {
+  (void)arg;
+  char chunk[244];   /* MTU 247 − 3 */
+  for (;;) {
+    size_t max = (size_t)s_mtu - 3;
+    if (max > sizeof(chunk)) max = sizeof(chunk);
+    size_t n = debug_log_read(chunk, max, 1000);
+    uint16_t conn = s_conn;
+    if (n == 0 || conn == BLE_HS_CONN_HANDLE_NONE || !s_sub_debug_log) continue;
+    notify(conn, h_debug_log, (const uint8_t *)chunk, n);
+  }
+}
+#endif
 
 /* Không chặn: gọi được từ callback của NimBLE. */
 static void enqueue(tx_kind_t kind, const void *data, uint8_t len, uint32_t arg) {
   if (s_conn == BLE_HS_CONN_HANDLE_NONE) return;
   tx_msg_t m = {.kind = (uint8_t)kind, .len = len, .arg = arg};
   if (data && len) memcpy(m.data, data, len);
-  if (xQueueSend(s_txq, &m, 0) != pdTRUE && kind != TX_LIVE)
-    ESP_LOGW(TAG, "hàng đợi gửi đầy, bỏ gói loại %d (dữ liệu vẫn còn trong flash)", kind);
+  if (xQueueSend(s_txq, &m, 0) != pdTRUE) {
+    diag_note_ble_drop();
+    if (kind != TX_LIVE) ESP_LOGW(TAG, "hàng đợi gửi đầy, bỏ gói loại %d (dữ liệu vẫn còn trong flash)", kind);
+  }
 }
 
 void ble_gatt_send_live(const ble_live_t *v) {
@@ -229,6 +275,11 @@ void ble_gatt_send_assessment(const ble_assessment_t *a) {
 }
 
 void ble_gatt_notify_status(void) { enqueue(TX_STATUS, NULL, 0, 0); }
+
+/* Chỉ gửi khi app đã bắt tay: điện thoại lạ kết nối không lấy mất số liệu đang chờ gửi qua WiFi. */
+void ble_gatt_send_diag(void) {
+  if (link_manager_state() == LINK_GATEWAY) enqueue(TX_DIAG, NULL, 0, 0);
+}
 
 bool ble_gatt_is_connected(void) { return s_conn != BLE_HS_CONN_HANDLE_NONE; }
 
@@ -277,6 +328,7 @@ static int write_control(struct ble_gatt_access_ctxt *ctxt) {
     case BLE_OP_SET_GATEWAY:
       link_manager_on_set_gateway(arg != 0);
       ble_gatt_notify_status();
+      ble_gatt_send_diag();   /* app vừa nhận vai gateway: gửi bù các cửa sổ DIAG lúc chạy WiFi / chưa có app */
       return 0;
     default:
       ESP_LOGW(TAG, "CONTROL opcode lạ 0x%02X", op);
@@ -301,7 +353,7 @@ static int write_config(struct ble_gatt_access_ctxt *ctxt) {
 }
 
 static int write_wifi(struct ble_gatt_access_ctxt *ctxt) {
-  uint8_t b[3 + WIFI_SSID_MAX_LEN + WIFI_PASS_MAX_LEN];
+  uint8_t b[BLE_PROTO_WIFI_WRITE_MAX];
   uint16_t len = 0;
   int rc = read_flat(ctxt, b, sizeof(b), &len);
   if (rc) return rc;
@@ -310,8 +362,14 @@ static int write_wifi(struct ble_gatt_access_ctxt *ctxt) {
     ESP_LOGW(TAG, "WIFI_PROV không hợp lệ (%u byte)", len);
     return BLE_PROTO_ATT_ERR_INVALID;
   }
-  if (cmd.op == BLE_WIFI_OP_CLEAR) return wifi_store_clear() == ESP_OK ? 0 : BLE_ATT_ERR_UNLIKELY;
-  return wifi_store_put(cmd.ssid, cmd.pass) ? 0 : BLE_PROTO_ATT_ERR_INVALID;
+  bool ok;
+  if (cmd.op == BLE_WIFI_OP_CLEAR) ok = wifi_store_clear() == ESP_OK;
+  else if (cmd.op == BLE_WIFI_OP_SET_KEY) ok = device_cred_set(cmd.key, cmd.url);
+  else ok = wifi_store_put(cmd.ssid, cmd.pass);
+  uplink_refresh_ready();   /* LED vàng khi đủ WiFi + khóa */
+  ble_gatt_notify_status(); /* app thấy ngay vòng đã sẵn sàng dự phòng WiFi chưa */
+  if (!ok) return cmd.op == BLE_WIFI_OP_CLEAR ? BLE_ATT_ERR_UNLIKELY : BLE_PROTO_ATT_ERR_INVALID;
+  return 0;
 }
 
 static int read_wifi(struct ble_gatt_access_ctxt *ctxt) {
@@ -346,6 +404,13 @@ static int chr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
   if (id == CHR_CONTROL && is_write) return write_control(ctxt);
   if (id == CHR_WIFI && is_read) return read_wifi(ctxt);
   if (id == CHR_WIFI && is_write) return write_wifi(ctxt);
+  if (id == CHR_DIAG && is_read) {
+    ble_diag_t d;
+    if (!diag_latest(&d)) return 0;   /* chưa đóng cửa sổ nào: trả rỗng */
+    uint8_t b[BLE_PROTO_DIAG_SIZE];
+    ble_proto_encode_diag(&d, b);
+    return append(ctxt, b, sizeof(b));
+  }
   return BLE_ATT_ERR_UNLIKELY;
 }
 
@@ -369,6 +434,12 @@ static const struct ble_gatt_svc_def s_svcs[] = {
              .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE},
             {.uuid = &UUID_WIFI.u, .access_cb = chr_access, .arg = (void *)CHR_WIFI,
              .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE},
+            {.uuid = &UUID_DIAG.u, .access_cb = chr_access, .arg = (void *)CHR_DIAG,
+             .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY, .val_handle = &h_diag},
+#if CONFIG_RESPI_BLE_DEBUG_LOG
+            {.uuid = &UUID_DEBUG_LOG.u, .access_cb = chr_access, .arg = (void *)CHR_DEBUG_LOG,
+             .flags = BLE_GATT_CHR_F_NOTIFY, .val_handle = &h_debug_log},
+#endif
             {0},
         },
     },
@@ -428,7 +499,8 @@ static void on_adv_timer(void *arg) {
 static void clear_link(void) {
   s_conn = BLE_HS_CONN_HANDLE_NONE;
   s_mtu = BLE_ATT_MTU_DFLT;
-  s_sub_live = s_sub_records = s_sub_assessment = s_sub_status = false;
+  s_sub_live = s_sub_records = s_sub_assessment = s_sub_status = s_sub_diag = s_sub_debug_log = false;
+  debug_log_set_enabled(false);
 }
 
 static int gap_event(struct ble_gap_event *ev, void *arg) {
@@ -465,6 +537,13 @@ static int gap_event(struct ble_gap_event *ev, void *arg) {
       else if (h == h_records) s_sub_records = on;
       else if (h == h_assessment) s_sub_assessment = on;
       else if (h == h_status) s_sub_status = on;
+      else if (h == h_diag) s_sub_diag = on;
+      else if (h_debug_log && h == h_debug_log) {
+        s_sub_debug_log = on;
+        debug_log_set_enabled(on);
+        if (on) ESP_LOGI(TAG, "nhật ký BLE bật | fw %s | boot %u | reset %s", esp_app_get_description()->version,
+                         (unsigned)device_state_boot_id(), ble_proto_reset_reason_name(diag_reset_reason()));
+      }
       return 0;
     }
 
@@ -516,5 +595,9 @@ void ble_gatt_init(void) {
   ble_svc_gap_device_name_set(s_name);
 
   xTaskCreate(tx_task, "ble_tx", 4096, NULL, 5, NULL);
+#if CONFIG_RESPI_BLE_DEBUG_LOG
+  debug_log_init();
+  xTaskCreate(log_task, "ble_log", 3072, NULL, 2, NULL);   /* ưu tiên thấp: nhật ký không chen dữ liệu đo */
+#endif
   nimble_port_freertos_init(host_task);
 }

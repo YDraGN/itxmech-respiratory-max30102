@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "ble_proto.h"
 #include "spo2_tc.h"
 
 #ifdef __cplusplus
@@ -23,6 +24,13 @@ void vitals_add_second(bool valid, float spo2, float hr, bool contact, uint8_t s
 
 /* Kết thúc phút hiện tại, bắt đầu phút mới. */
 void vitals_finish_minute(vitals_minute_t *out);
+
+/*
+ * Kết thúc cửa sổ hiển thị (LIVE, mặc định 15 s), bắt đầu cửa sổ mới. Trả số giây đã gộp.
+ * Cùng cách gộp như bản ghi phút (trung bình / nhỏ nhất các giây hợp lệ), nên số trên app, máy người nhà
+ * và web là một, chỉ khác độ dài cửa sổ.
+ */
+int vitals_finish_window(ble_live_t *out);
 
 /* Lưu phút vào lịch sử 30 phút (sau khi đã push engine). */
 void vitals_history_push(const float m[SPO2TC_N_CH]);

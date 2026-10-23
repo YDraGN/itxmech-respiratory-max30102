@@ -38,9 +38,10 @@ static void enter(link_state_t next) {
       break;
     case LINK_GATEWAY:
       uplink_set_active(false);
-      led_status_connected();
+      led_status_gateway();
       break;
     case LINK_STANDALONE:
+      led_status_standalone();
       uplink_set_active(true);
       break;
   }

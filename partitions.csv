@@ -2,6 +2,7 @@
 # Name,   Type, SubType, Offset,   Size
 nvs,      data, nvs,     0x9000,   0x6000
 phy_init, data, phy,     0xf000,   0x1000
-factory,  app,  factory, 0x10000,  0x200000
+# App 3 MB: thêm WiFi + HTTPS (chế độ WiFi) làm firmware lớn hơn ~0,6 MB so với bản chỉ có BLE
+factory,  app,  factory, 0x10000,  0x300000
 # Bộ đệm vòng các bản ghi phút + assessment (main/storage/record_log.c), khoảng 6 ngày
-reclog,   data, 0x40,    0x210000, 0x80000
+reclog,   data, 0x40,    0x310000, 0x80000

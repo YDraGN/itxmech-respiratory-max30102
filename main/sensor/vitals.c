@@ -21,6 +21,7 @@ typedef struct {
 } minute_acc_t;
 
 static minute_acc_t s_acc;
+static minute_acc_t s_win;   /* cửa sổ LIVE, cùng kiểu gộp với phút */
 static SemaphoreHandle_t s_mutex;
 static volatile bool s_worn;
 
@@ -39,12 +40,10 @@ static void acc_reset(minute_acc_t *a) {
 void vitals_init(void) {
   s_mutex = xSemaphoreCreateMutex();
   acc_reset(&s_acc);
+  acc_reset(&s_win);
 }
 
-void vitals_add_second(bool valid, float spo2, float hr, bool contact, uint8_t sqi_pct) {
-  s_worn = contact;
-  xSemaphoreTake(s_mutex, portMAX_DELAY);
-  minute_acc_t *a = &s_acc;
+static void acc_add(minute_acc_t *a, bool valid, float spo2, float hr, bool contact, uint8_t sqi_pct) {
   a->n_sec++;
   a->sqi_sum += sqi_pct;
   if (contact) a->n_contact++;
@@ -57,7 +56,30 @@ void vitals_add_second(bool valid, float spo2, float hr, bool contact, uint8_t s
       a->n_pu++;
     }
   }
+}
+
+void vitals_add_second(bool valid, float spo2, float hr, bool contact, uint8_t sqi_pct) {
+  s_worn = contact;
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  acc_add(&s_acc, valid, spo2, hr, contact, sqi_pct);
+  acc_add(&s_win, valid, spo2, hr, contact, sqi_pct);
   xSemaphoreGive(s_mutex);
+}
+
+int vitals_finish_window(ble_live_t *out) {
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  const minute_acc_t *a = &s_win;
+  int n_sec = a->n_sec;
+  out->ts = device_clock_now();
+  out->spo2 = a->n_sp ? (float)(a->sp_sum / a->n_sp) : NAN;
+  out->spo2_min = a->n_sp ? a->sp_min : NAN;
+  out->pulse = a->n_pu ? (float)(a->pu_sum / a->n_pu) : NAN;
+  out->sqi_pct = n_sec ? (uint8_t)(a->sqi_sum / n_sec) : 0;
+  out->valid_pct = n_sec ? (uint8_t)(100 * a->n_sp / n_sec) : 0;
+  out->worn = n_sec > 0 && a->n_contact * 2 > n_sec;
+  acc_reset(&s_win);
+  xSemaphoreGive(s_mutex);
+  return n_sec;
 }
 
 void vitals_finish_minute(vitals_minute_t *out) {
